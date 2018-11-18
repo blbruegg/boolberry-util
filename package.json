@@ -1,20 +1,23 @@
 {
-    "name": "cryptonote-util",
+    "name": "boolberry-util",
     "version": "0.0.1",
-    "main": "cryptonote",
+    "main": "boolberry",
     "author": {
-        "name": "LucasJones",
-        "email": "lucasjonesdev@hotmail.co.uk"
+        "name": "Lucas Jones",
+        "email": "lucasjonesdev@hotmail.co.uk",
+        "Updates": "Brandon Brueggeman"
+ 
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/LucasJones/node-cryptonote-util.git"
+        "url": "https://github.com/blbruegg/boolberry-util.git"
     },
     "dependencies" : {
         "bindings" : "*"
+        "nan": "^2.0.0"
     },
     "keywords": [
-        "cryptonight",
-        "cryptonote"
+        "boolberry"
+        
     ]
 }
