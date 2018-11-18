@@ -61,6 +61,8 @@ namespace cryptonote
   bool add_extra_nonce_to_tx_extra(std::vector<uint8_t>& tx_extra, const blobdata& extra_nonce);
   void set_payment_id_to_tx_extra_nonce(blobdata& extra_nonce, const crypto::hash& payment_id);
   bool get_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash& payment_id);
+  bool append_mm_tag_to_extra(std::vector<uint8_t>& tx_extra, const tx_extra_merge_mining_tag& mm_tag);
+  bool get_mm_tag_from_extra(const std::vector<uint8_t>& tx_extra, tx_extra_merge_mining_tag& mm_tag);
   bool is_out_to_acc(const account_keys& acc, const txout_to_key& out_key, const crypto::public_key& tx_pub_key, size_t output_index);
   bool lookup_acc_outs(const account_keys& acc, const transaction& tx, const crypto::public_key& tx_pub_key, std::vector<size_t>& outs, uint64_t& money_transfered);
   bool lookup_acc_outs(const account_keys& acc, const transaction& tx, std::vector<size_t>& outs, uint64_t& money_transfered);
@@ -74,12 +76,18 @@ namespace cryptonote
   crypto::hash get_transaction_hash(const transaction& t);
   bool get_transaction_hash(const transaction& t, crypto::hash& res);
   bool get_transaction_hash(const transaction& t, crypto::hash& res, size_t& blob_size);
-  blobdata get_block_hashing_blob(const block& b);
-  blobdata get_block_hashing_blob(const bb_block& b);
+  bool get_transaction_hash(const transaction& t, crypto::hash& res, size_t* blob_size);
+  bool get_block_hashing_blob(const block& b, blobdata& blob);
+  
+  bool get_boolberry_hashing_blob(const bb_block& b, blobdata& blob);
+  
+  bool get_bytecoin_block_hashing_blob(const block& b, blobdata& blob);
   bool get_block_hash(const block& b, crypto::hash& res);
   crypto::hash get_block_hash(const block& b);
+  bool get_block_header_hash(const block& b, crypto::hash& res);
   bool get_block_longhash(const block& b, crypto::hash& res, uint64_t height);
   crypto::hash get_block_longhash(const block& b, uint64_t height);
+  bool get_bytecoin_block_longhash(const block& blk, crypto::hash& res);
   bool generate_genesis_block(block& bl);
   bool parse_and_validate_block_from_blob(const blobdata& b_blob, block& b);
   bool parse_and_validate_block_from_blob(const blobdata& b_blob, bb_block& b);
@@ -87,7 +95,7 @@ namespace cryptonote
   uint64_t get_outs_money_amount(const transaction& tx);
   bool check_inputs_types_supported(const transaction& tx);
   bool check_outs_valid(const transaction& tx);
-  blobdata get_block_hashing_blob(const block& b);
+  bool get_block_hashing_blob(const block& b);
   bool parse_amount(uint64_t& amount, const std::string& str_amount);
 
   bool check_money_overflow(const transaction& tx);
