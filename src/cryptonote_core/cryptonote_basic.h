@@ -6,6 +6,7 @@
 
 #include <boost/variant.hpp>
 #include <boost/functional/hash/hash.hpp>
+#include <iostream>
 #include <vector>
 #include <cstring>  // memcmp
 #include <sstream>
@@ -23,11 +24,19 @@
 #include "crypto/hash.h"
 #include "misc_language.h"
 #include "tx_extra.h"
+#include "ringct/rctTypes.h"
 
 
 namespace cryptonote
 {
+  struct block;
+  class transaction;
+  struct tx_extra_merge_mining_tag;
 
+  //Implemented in cryptonote_format_utils.cpp
+  bool get_transaction_hash(const transaction& t, crypto::hash& res);
+  bool get_mm_tag_from_extra(const std::vector<uint8_t>& tx, tx_extra_merge_mining_tag& mm_tag);
+  
   const static crypto::hash null_hash = AUTO_VAL_INIT(null_hash);
   const static crypto::public_key null_pkey = AUTO_VAL_INIT(null_pkey);
 
@@ -58,6 +67,8 @@ namespace cryptonote
     txout_to_key(const crypto::public_key &_key) : key(_key) { }
     crypto::public_key key;
   };
+
+    
 
   #pragma pack(push, 1)
   struct bb_txout_to_key
@@ -154,6 +165,7 @@ namespace cryptonote
   {
 
   public:
+    enum BLOB_TYPE blob_type;
     // tx information
     size_t   version;
     uint64_t unlock_time;  //number of block (or time), used as a limitation like: spend this tx not early then block/time
@@ -162,9 +174,17 @@ namespace cryptonote
     std::vector<tx_out> vout;
     //extra
     std::vector<uint8_t> extra;
+    
+    std::vector<uint64_t> output_unlock_times;
+    bool is_deregister;
 
     BEGIN_SERIALIZE()
       VARINT_FIELD(version)
+      if (blob_type == BLOB_TYPE_CRYPTONOTE_LOKI)
+      {
+        FIELD(output_unlock_times)
+        FIELD(is_deregister)
+      }
       if(CURRENT_TRANSACTION_VERSION < version) return false;
       VARINT_FIELD(unlock_time)
       FIELD(vin)
@@ -174,20 +194,25 @@ namespace cryptonote
 
 
   protected:
-    transaction_prefix(){}
+    transaction_prefix() : blob_type(BLOB_TYPE_CRYPTONOTE) {}
   };
 
   class transaction: public transaction_prefix
   {
   public:
     std::vector<std::vector<crypto::signature> > signatures; //count signatures  always the same as inputs count
-
+    rct::rctSig rct_signatures;
+    
+    
     transaction();
     virtual ~transaction();
     void set_null();
 
     BEGIN_SERIALIZE_OBJECT()
       FIELDS(*static_cast<transaction_prefix *>(this))
+      
+      if (version ==1 && blob_type != BLOB_TYPE_CRYPTONOTE2)
+      {
 
       ar.tag("signatures");
       ar.begin_array();
@@ -217,6 +242,28 @@ namespace cryptonote
           ar.delimit_array();
       }
       ar.end_array();
+    }
+    else
+    {
+      {
+        ar.tag("rct_signatures");
+        if (!vin.empty())
+        {
+          ar.begin_object();
+          bool r = rct_signatures.serialize_rctsig_base(ar, vin.size(), vout.size());
+          if (!r || !ar.stream().good()) return false;
+          ar.end_object();
+          if (rct_signatures.type != rct::RCTTypeNull)
+          {
+            ar.tag("rctsig_prunable");
+            ar.begin_object();
+            r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, vin.size(), vout.size(),
+                vin[0].type() == typeid(txin_to_key) ? boost::get<txin_to_key>(vin[0]).key_offsets.size() - 1 : 0);
+            if (!r || !ar.stream().good()) return false;
+            ar.end_object();
+          }
+        }
+      }
     END_SERIALIZE()
 
   private:
@@ -340,14 +387,148 @@ namespace cryptonote
 
     return boost::apply_visitor(txin_signature_size_visitor(), tx_in);
   }
+  else
+  {
+    private:
+    static size_t get_signature_size(const txin_v& tx_in);
+  };
+
+  inline
+  transaction::transaction()
+  {
+    set_null();
+  }
+
+  inline
+  transaction::~transaction()
+  {
+    //set_null();
+  }
+
+  inline
+  void transaction::set_null()
+  {
+    version = 0;
+    unlock_time = 0;
+    vin.clear();
+    vout.clear();
+    extra.clear();
+    signatures.clear();
+  }
+
+  inline
+  size_t transaction::get_signature_size(const txin_v& tx_in)
+  {
+    struct txin_signature_size_visitor : public boost::static_visitor<size_t>
+    {
+      size_t operator()(const txin_gen& txin) const{return 0;}
+      size_t operator()(const txin_to_script& txin) const{return 0;}
+      size_t operator()(const txin_to_scripthash& txin) const{return 0;}
+      size_t operator()(const txin_to_key& txin) const {return txin.key_offsets.size();}
+    };
+
+    return boost::apply_visitor(txin_signature_size_visitor(), tx_in);
+  }
 
 
 
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/
+  const uint8_5 CURRENT_BYTECOIN_BLOCK_MAJOR_VERSION = 1;
+  
+   struct bytecoin_block
+  {
+    uint8_t major_version;
+    uint8_t minor_version;
+    crypto::hash prev_id;
+    uint32_t nonce;
+    size_t number_of_transactions;
+    std::vector<crypto::hash> miner_tx_branch;
+    transaction miner_tx;
+    std::vector<crypto::hash> blockchain_branch;
+  };
+
+  struct serializable_bytecoin_block
+  {
+    bytecoin_block& b;
+    uint64_t& timestamp;
+    bool hashing_serialization;
+    bool header_only;
+
+    serializable_bytecoin_block(bytecoin_block& b_, uint64_t& timestamp_, bool hashing_serialization_, bool header_only_) :
+      b(b_), timestamp(timestamp_), hashing_serialization(hashing_serialization_), header_only(header_only_)
+    {
+    }
+
+    BEGIN_SERIALIZE_OBJECT()
+      VARINT_FIELD_N("major_version", b.major_version);
+      VARINT_FIELD_N("minor_version", b.minor_version);
+      VARINT_FIELD(timestamp);
+      FIELD_N("prev_id", b.prev_id);
+      FIELD_N("nonce", b.nonce);
+
+      if (hashing_serialization)
+      {
+        crypto::hash miner_tx_hash;
+        if (!get_transaction_hash(b.miner_tx, miner_tx_hash))
+          return false;
+
+        crypto::hash merkle_root;
+        crypto::tree_hash_from_branch(b.miner_tx_branch.data(), b.miner_tx_branch.size(), miner_tx_hash, 0, merkle_root);
+
+        FIELD(merkle_root);
+      }
+
+      VARINT_FIELD_N("number_of_transactions", b.number_of_transactions);
+      if (b.number_of_transactions < 1)
+        return false;
+
+      if (!header_only)
+      {
+        ar.tag("miner_tx_branch");
+        ar.begin_array();
+        size_t branch_size = crypto::tree_depth(b.number_of_transactions);
+        PREPARE_CUSTOM_VECTOR_SERIALIZATION(branch_size, const_cast<bytecoin_block&>(b).miner_tx_branch);
+        if (b.miner_tx_branch.size() != branch_size)
+          return false;
+        for (size_t i = 0; i < branch_size; ++i)
+        {
+          FIELDS(b.miner_tx_branch[i]);
+          if (i + 1 < branch_size)
+            ar.delimit_array();
+        }
+        ar.end_array();
+
+        FIELD(b.miner_tx);
+
+        tx_extra_merge_mining_tag mm_tag;
+        if (!get_mm_tag_from_extra(b.miner_tx.extra, mm_tag))
+          return false;
+
+        ar.tag("blockchain_branch");
+        ar.begin_array();
+        PREPARE_CUSTOM_VECTOR_SERIALIZATION(mm_tag.depth, const_cast<bytecoin_block&>(b).blockchain_branch);
+        if (mm_tag.depth != b.blockchain_branch.size())
+          return false;
+        for (size_t i = 0; i < mm_tag.depth; ++i)
+        {
+          FIELDS(b.blockchain_branch[i]);
+          if (i + 1 < mm_tag.depth)
+            ar.delimit_array();
+        }
+        ar.end_array();
+      }
+    END_SERIALIZE()
+  };
+  
+  // Implemented below
+  inline serializable_bytecoin_block make_serializable_bytecoin_block(const block& b, bool hashing_serialization, bool header_only);
+  
   struct block_header
   {
+  enum BLOB_TYPE blob_type;
+  
     uint8_t major_version;
     uint8_t minor_version;
     uint64_t timestamp;
@@ -357,23 +538,33 @@ namespace cryptonote
     BEGIN_SERIALIZE()
       VARINT_FIELD(major_version)
       VARINT_FIELD(minor_version)
-      VARINT_FIELD(timestamp)
+      if (blob_type != BLOB_TYPE_FORKNOTE2) VARIANT_FIELD(timestamp)
       FIELD(prev_id)
-      FIELD(nonce)
+      if (blob(type != BLOB_TYPE_FORKNOTE2) FIELD(nonce)
     END_SERIALIZE()
   };
 
   struct block: public block_header
   {
+   bytecoin_block parent_block;
+   
     transaction miner_tx;
     std::vector<crypto::hash> tx_hashes;
 
+    void set_blob_type(enum BLOB_TYPE bt) { miner_tx.blob_type = blob_type = bt; }
+    
     BEGIN_SERIALIZE_OBJECT()
       FIELDS(*static_cast<block_header *>(this))
+      if (blob_type == BLOB_TYPE_FORKNOTE2)
+      {
+        auto sbb = make_serializable_bytecoin_block(*this, false, false);
+        FIELD_N("parent_block", sbb);
+      }
       FIELD(miner_tx)
       FIELD(tx_hashes)
     END_SERIALIZE()
   };
+  
 
   struct bb_block_header
   {
@@ -406,7 +597,12 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-
+  inline serializable_bytecoin_block make_serializable_bytecoin_block(const block& b, bool hashing_serialization, bool header_only)
+  {
+    block& block_ref = const_cast<block&>(b);
+    return serializable_bytecoin_block(block_ref.parent_block, block_ref.timestamp, hashing_serialization, header_only);
+  }
+  
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/
@@ -425,6 +621,22 @@ namespace cryptonote
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_view_public_key)
     END_KV_SERIALIZE_MAP()
   };
+  
+  struct integrated_address {
+    account_public_address adr;
+    crypto::hash8 payment_id;
+
+    BEGIN_SERIALIZE_OBJECT()
+    FIELD(adr)
+    FIELD(payment_id)
+    END_SERIALIZE()
+
+    BEGIN_KV_SERIALIZE_MAP()
+    KV_SERIALIZE(adr)
+    KV_SERIALIZE(payment_id)
+    END_KV_SERIALIZE_MAP()
+  };
+
 
   struct keypair
   {
